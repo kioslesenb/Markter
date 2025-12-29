@@ -269,7 +269,7 @@ def generate_keywords_via_hf_space(image_bytes: bytes) -> str:
 async def analyze_photo(file: UploadFile = File(...)):
     image_bytes = await file.read()
 
-    query = generate_keywords_from_image(image_bytes)
+    query = generate_keywords_via_hf_space(image_bytes)
 
     limit = 30
     result = fetch_ebay_sold(query, limit=limit)
@@ -307,3 +307,4 @@ for r in app.routes:
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
 
 print("=====================\n")
+

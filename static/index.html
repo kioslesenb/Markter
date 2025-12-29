@@ -91,7 +91,7 @@
 
             const formData = new FormData();
             if (file) formData.append("file", file);
-            formData.append("user_query", manualQuery.value.trim());
+            formData.append("keywords", manualQuery.value.trim());
 
             try {
                 const response = await fetch("/analyze", {
@@ -133,4 +133,5 @@
         });
     </script>
 </body>
+
 </html>

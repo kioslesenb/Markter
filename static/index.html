@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Markter - Waarde schatter</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; text-align: center; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 15px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); }
+        h1 { color: #007bff; margin-bottom: 10px; }
+        p { color: #555; }
+        input[type="file"], input[type="text"] { 
+            width: 100%; padding: 12px; margin: 15px 0; font-size: 16px; border: 1px solid #ddd; border-radius: 8px; 
+        }
+        button { 
+            padding: 15px 30px; font-size: 18px; background: #28a745; color: white; border: none; border-radius: 10px; cursor: pointer; 
+        }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        #preview { max-width: 100%; margin: 20px 0; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.2); }
+        #status { margin: 20px 0; font-size: 18px; color: #007bff; }
+        .result { margin-top: 30px; padding: 20px; background: #e9f7ef; border-radius: 10px; display: none; }
+        .stats { font-size: 22px; font-weight: bold; color: #28a745; margin: 15px 0; }
+        .query { font-size: 18px; margin: 10px 0; color: #333; }
+        .items { text-align: left; max-height: 500px; overflow-y: auto; margin-top: 20px; }
+        .item { padding: 12px; border-bottom: 1px solid #ddd; }
+        .item:last-child { border-bottom: none; }
+        .price { font-weight: bold; color: #28a745; font-size: 20px; }
+        .condition { font-size: 14px; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📸 Markter</h1>
+        <p>Maak een foto of upload er een, en typ zoekwoorden om de marktwaarde te zien</p>
+
+        <!-- Foto maken/uploaden -->
+        <input type="file" id="photoInput" accept="image/*" capture="environment">
+
+        <!-- Handmatige zoekwoorden -->
+        <input type="text" id="manualQuery" placeholder="bijv. lego star wars millennium falcon used" />
+
+        <br><br>
+        <button id="analyzeBtn">🔍 Waarde schatten</button>
+
+        <div id="status"></div>
+        <img id="preview" src="" alt="Voorbeeld foto" style="display:none;">
+
+        <div id="result" class="result">
+            <div class="query">Zoekopdracht: <strong id="query">?</strong></div>
+            <div class="stats">
+                Gemiddelde prijs: €<span id="avg">?</span><br>
+                Bereik: €<span id="min">?</span> - €<span id="max">?</span> (<span id="count">?</span> verkopen)
+            </div>
+            <div id="items" class="items"></div>
+        </div>
+    </div>
+
+    <script>
+        const photoInput = document.getElementById('photoInput');
+        const manualQuery = document.getElementById('manualQuery');
+        const preview = document.getElementById('preview');
+        const status = document.getElementById('status');
+        const result = document.getElementById('result');
+        const querySpan = document.getElementById('query');
+        const avgSpan = document.getElementById('avg');
+        const minSpan = document.getElementById('min');
+        const maxSpan = document.getElementById('max');
+        const countSpan = document.getElementById('count');
+        const itemsDiv = document.getElementById('items');
+        const analyzeBtn = document.getElementById('analyzeBtn');
+
+        // Preview van foto tonen
+        photoInput.addEventListener('change', (e) => {
+            if (e.target.files[0]) {
+                preview.src = URL.createObjectURL(e.target.files[0]);
+                preview.style.display = 'block';
+            }
+        });
+
+        // Analyse knop
+        analyzeBtn.addEventListener('click', async () => {
+            const file = photoInput.files[0];
+            if (!file && !manualQuery.value.trim()) {
+                alert("Maak een foto of typ zoekwoorden!");
+                return;
+            }
+
+            status.innerHTML = "Bezig met ophalen van prijzen...";
+            result.style.display = 'none';
+            analyzeBtn.disabled = true;
+
+            const formData = new FormData();
+            if (file) formData.append("file", file);
+            formData.append("user_query", manualQuery.value.trim());
+
+            try {
+                const response = await fetch("/analyze", {
+                    method: "POST",
+                    body: formData
+                });
+                const data = await response.json();
+
+                if (data.items && data.items.length > 0) {
+                    querySpan.textContent = data.used_query || "onbekend";
+                    avgSpan.textContent = data.stats.average_eur;
+                    minSpan.textContent = data.stats.min_eur;
+                    maxSpan.textContent = data.stats.max_eur;
+                    countSpan.textContent = data.stats.count;
+
+                    itemsDiv.innerHTML = "";
+                    data.items.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'item';
+                        div.innerHTML = `
+                            <strong>${item.title}</strong><br>
+                            <span class="price">€${item.price_eur.toFixed(2)}</span><br>
+                            <small class="condition">${item.condition}</small>
+                        `;
+                        itemsDiv.appendChild(div);
+                    });
+
+                    result.style.display = 'block';
+                    status.innerHTML = "Klaar!";
+                } else {
+                    status.innerHTML = "Geen verkopen gevonden voor deze zoekopdracht.";
+                }
+            } catch (err) {
+                status.innerHTML = "Fout: " + err.message;
+                console.error(err);
+            } finally {
+                analyzeBtn.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -13,6 +13,8 @@ from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
 import torch
 import os
+import tempfile
+from gradio_client import Client
 
 SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
 
@@ -238,7 +240,30 @@ def generate_keywords_from_image(image_bytes: bytes) -> str:
     except Exception as e:
         print(f"BLIP fout: {e}")
         return "used product"
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").strip()
+_hf_client = None
 
+def generate_keywords_via_hf_space(image_bytes: bytes) -> str:
+    global _hf_client
+    if not HF_SPACE_URL:
+        return "used product"
+
+    if _hf_client is None:
+        _hf_client = Client(HF_SPACE_URL)
+
+    # gradio_client werkt het makkelijkst met een tijdelijk bestand
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as f:
+        f.write(image_bytes)
+        f.flush()
+
+        # De Space heeft 1 input (image) en 1 output (text)
+        # predict returns meestal direct de string
+        out = _hf_client.predict(f.name, api_name="/predict")
+
+    if isinstance(out, str) and out.strip():
+        return out.strip()
+
+    return "used product"
 # ----------------- analyze endpoint -----------------
 @app.post("/analyze")
 async def analyze_photo(file: UploadFile = File(...)):
@@ -280,4 +305,5 @@ print("\n=== ROUTES LOADED ===")
 for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
+
 print("=====================\n")

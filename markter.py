@@ -142,7 +142,7 @@ def generate_keywords_from_image(image_bytes: bytes) -> str:
         with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
             f.write(image_bytes)
             f.flush()
-            out = client.predict(f.name, api_name="/predict")
+            out = client.predict(f.name)
         if isinstance(out, str) and out.strip():
             return out.strip()
         return "used product"
@@ -288,3 +288,4 @@ for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
 print("=====================\n")
+

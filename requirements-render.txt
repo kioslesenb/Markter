@@ -1,6 +1,7 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
 fastapi
 uvicorn[standard]
 requests
 pillow
 transformers
-torch --index-url https://download.pytorch.org/whl/cpu
+torch==2.9.1+cpu

@@ -1,22 +1,22 @@
+import os
 import time
 import json
 import hashlib
 import sqlite3
 import threading
 import requests
-import io
+import tempfile
+
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
-from transformers import BlipProcessor, BlipForConditionalGeneration
-from PIL import Image
-import torch
-import os
-import tempfile
+
 from gradio_client import Client
 
-SERPAPI_KEY = os.getenv("SERPAPI_KEY", "")
+# ----------------- ENV -----------------
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "").strip()
+HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").strip()
 
 # ----------------- settings -----------------
 DB_PATH = "cache.sqlite3"
@@ -33,17 +33,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 async def root():
     with open("static/index.html", encoding="utf-8") as f:
         return f.read()
-
-# ----------------- BLIP model laden (lokaal, CPU-vriendelijk) -----------------
-print("BLIP model laden... (eenmalig ~1GB download)")
-
-device = "cpu"
-
-processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-
-model.to(device)
-print("BLIP model succesvol geladen!")
 
 # ----------------- global limiter state -----------------
 _limiter_lock = threading.Lock()
@@ -74,6 +63,7 @@ def _limiter_allow() -> tuple[bool, dict]:
 
 # ----------------- sqlite cache -----------------
 _db_lock = threading.Lock()
+
 def _db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.execute("""
@@ -87,6 +77,7 @@ def _db():
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_ts ON cache(ts)")
     return conn
+
 _conn = _db()
 
 def _cache_key(query: str, limit: int) -> str:
@@ -124,6 +115,41 @@ def _cache_clear():
     with _db_lock:
         _conn.execute("DELETE FROM cache")
         _conn.commit()
+
+# ----------------- HF Space client (lazy) -----------------
+_hf_client = None
+_hf_lock = threading.Lock()
+
+def _get_hf_client() -> Client:
+    global _hf_client
+    if not HF_SPACE_URL:
+        raise RuntimeError("HF_SPACE_URL is missing")
+    with _hf_lock:
+        if _hf_client is None:
+            _hf_client = Client(HF_SPACE_URL)
+        return _hf_client
+
+def generate_keywords_from_image(image_bytes: bytes) -> str:
+    """
+    Uses Hugging Face Space (Gradio) to generate a caption/query from an image.
+    Returns a safe fallback if the Space is unreachable.
+    """
+    if not HF_SPACE_URL:
+        return "used product"
+
+    try:
+        client = _get_hf_client()
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+            f.write(image_bytes)
+            f.flush()
+            out = client.predict(f.name, api_name="/predict")
+        if isinstance(out, str) and out.strip():
+            return out.strip()
+        return "used product"
+    except Exception as e:
+        # Keep the web app responsive even if Space is sleeping/down
+        print("HF Space error:", repr(e))
+        return "used product"
 
 # ----------------- serpapi helpers -----------------
 def _serpapi_call_sold(query: str, limit: int):
@@ -177,7 +203,7 @@ def _serpapi_call_sold(query: str, limit: int):
             continue
 
         comps.append({
-            "title": it.get("title", "")[:200],
+            "title": (it.get("title", "") or "")[:200],
             "price_eur": price_eur,
             "url": it.get("link", ""),
             "condition": it.get("condition", "Onbekend"),
@@ -192,8 +218,9 @@ def _serpapi_call_sold(query: str, limit: int):
 
 # ----------------- main fetch -----------------
 def fetch_ebay_sold(query: str, limit: int = 50):
-    if not SERPAPI_KEY or not SERPAPI_KEY.strip():
+    if not SERPAPI_KEY:
         raise HTTPException(status_code=400, detail={"reason": "missing_serpapi_key"})
+
     limit = max(1, min(int(limit), 200))
 
     cached = _cache_get(query, limit)
@@ -219,57 +246,12 @@ def fetch_ebay_sold(query: str, limit: int = 50):
             return cached["data"]
         raise
 
-# ----------------- Lokale BLIP caption generatie -----------------
-def generate_keywords_from_image(image_bytes: bytes) -> str:
-    try:
-        raw_image = Image.open(io.BytesIO(image_bytes)).convert('RGB')
-
-        # unconditional image captioning
-        inputs = processor(raw_image, return_tensors="pt").to(device)
-
-        out = model.generate(**inputs, max_new_tokens=50)
-        caption = processor.decode(out[0], skip_special_tokens=True)
-
-        query = f"{caption} used"
-        query = query.lower().replace("\n", " ")
-
-        print(f"BLIP caption: {caption}")
-        print(f"Gebruikte query: {query}")
-
-        return query
-    except Exception as e:
-        print(f"BLIP fout: {e}")
-        return "used product"
-HF_SPACE_URL = os.getenv("HF_SPACE_URL", "").strip()
-_hf_client = None
-
-def generate_keywords_via_hf_space(image_bytes: bytes) -> str:
-    global _hf_client
-    if not HF_SPACE_URL:
-        return "used product"
-
-    if _hf_client is None:
-        _hf_client = Client(HF_SPACE_URL)
-
-    # gradio_client werkt het makkelijkst met een tijdelijk bestand
-    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=True) as f:
-        f.write(image_bytes)
-        f.flush()
-
-        # De Space heeft 1 input (image) en 1 output (text)
-        # predict returns meestal direct de string
-        out = _hf_client.predict(f.name, api_name="/predict")
-
-    if isinstance(out, str) and out.strip():
-        return out.strip()
-
-    return "used product"
 # ----------------- analyze endpoint -----------------
 @app.post("/analyze")
 async def analyze_photo(file: UploadFile = File(...)):
     image_bytes = await file.read()
 
-    query = generate_keywords_via_hf_space(image_bytes)
+    query = generate_keywords_from_image(image_bytes)
 
     limit = 30
     result = fetch_ebay_sold(query, limit=limit)
@@ -305,6 +287,4 @@ print("\n=== ROUTES LOADED ===")
 for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
-
 print("=====================\n")
-

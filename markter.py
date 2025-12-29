@@ -7,6 +7,7 @@ import threading
 import requests
 import tempfile
 
+from gradio_client import Client, handle_file
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.routing import APIRoute
 from fastapi.staticfiles import StaticFiles
@@ -144,30 +145,28 @@ def _get_hf_client() -> Client:
 
 
 def generate_keywords_from_image(image_bytes: bytes, filename: str = "image.png") -> str:
-    """
-    Uses Hugging Face Space (Gradio) to generate a caption/query from an image.
-    Sends the image as an uploaded file tuple (filename, filehandle) to satisfy ImageData validation.
-    """
     if not HF_SPACE_URL:
         return "used product"
 
     try:
         client = _get_hf_client()
 
-        # keep extension if we have one
         suffix = ".png"
-        if filename and "." in filename:
+        if "." in filename:
             suffix = "." + filename.rsplit(".", 1)[1].lower()
 
         with tempfile.NamedTemporaryFile(suffix=suffix) as f:
             f.write(image_bytes)
             f.flush()
-            with open(f.name, "rb") as fp:
-                out = client.predict((filename or f"image{suffix}", fp))
 
-        if isinstance(out, str) and out.strip():
-            return out.strip()
-        return "used product"
+            # 🔑 DIT is de correcte call
+            out = client.predict(
+                image_path=handle_file(f.name),
+                api_name="/caption_image",
+            )
+
+        return out.strip() if isinstance(out, str) and out.strip() else "used product"
+
     except Exception as e:
         print("HF Space error:", repr(e))
         return "used product"
@@ -335,4 +334,5 @@ for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
 print("=====================\n")
+
 

@@ -3,3 +3,4 @@ uvicorn[standard]
 requests
 pillow
 gradio_client
+python-multipart

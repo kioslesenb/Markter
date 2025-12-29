@@ -29,10 +29,12 @@ MAX_CALLS_PER_DAY = 200
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 @app.get("/", response_class=HTMLResponse)
 async def root():
     with open("static/index.html", encoding="utf-8") as f:
         return f.read()
+
 
 # ----------------- global limiter state -----------------
 _limiter_lock = threading.Lock()
@@ -40,8 +42,10 @@ _last_call_ts = 0.0
 _day_key = None
 _day_calls = 0
 
+
 def _today_key_local() -> str:
     return time.strftime("%Y-%m-%d", time.localtime())
+
 
 def _limiter_allow() -> tuple[bool, dict]:
     global _last_call_ts, _day_key, _day_calls
@@ -61,8 +65,10 @@ def _limiter_allow() -> tuple[bool, dict]:
         _day_calls += 1
         return True, {"day_calls": _day_calls, "day_cap": MAX_CALLS_PER_DAY}
 
+
 # ----------------- sqlite cache -----------------
 _db_lock = threading.Lock()
+
 
 def _db():
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -78,10 +84,13 @@ def _db():
     conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_ts ON cache(ts)")
     return conn
 
+
 _conn = _db()
+
 
 def _cache_key(query: str, limit: int) -> str:
     return hashlib.sha256(f"{query}\n{limit}".encode("utf-8")).hexdigest()
+
 
 def _cache_get(query: str, limit: int):
     k = _cache_key(query, limit)
@@ -100,6 +109,7 @@ def _cache_get(query: str, limit: int):
     data["debug"]["cache_age_seconds"] = age
     return {"k": k, "ts": int(ts), "age": age, "data": data}
 
+
 def _cache_set(query: str, limit: int, data: dict):
     k = _cache_key(query, limit)
     ts = int(time.time())
@@ -111,14 +121,17 @@ def _cache_set(query: str, limit: int, data: dict):
         )
         _conn.commit()
 
+
 def _cache_clear():
     with _db_lock:
         _conn.execute("DELETE FROM cache")
         _conn.commit()
 
+
 # ----------------- HF Space client (lazy) -----------------
 _hf_client = None
 _hf_lock = threading.Lock()
+
 
 def _get_hf_client() -> Client:
     global _hf_client
@@ -129,27 +142,36 @@ def _get_hf_client() -> Client:
             _hf_client = Client(HF_SPACE_URL)
         return _hf_client
 
-def generate_keywords_from_image(image_bytes: bytes) -> str:
+
+def generate_keywords_from_image(image_bytes: bytes, filename: str = "image.png") -> str:
     """
     Uses Hugging Face Space (Gradio) to generate a caption/query from an image.
-    Returns a safe fallback if the Space is unreachable.
+    Sends the image as an uploaded file tuple (filename, filehandle) to satisfy ImageData validation.
     """
     if not HF_SPACE_URL:
         return "used product"
 
     try:
         client = _get_hf_client()
-        with tempfile.NamedTemporaryFile(suffix=".jpg") as f:
+
+        # keep extension if we have one
+        suffix = ".png"
+        if filename and "." in filename:
+            suffix = "." + filename.rsplit(".", 1)[1].lower()
+
+        with tempfile.NamedTemporaryFile(suffix=suffix) as f:
             f.write(image_bytes)
             f.flush()
-            out = client.predict(f.name)
+            with open(f.name, "rb") as fp:
+                out = client.predict((filename or f"image{suffix}", fp))
+
         if isinstance(out, str) and out.strip():
             return out.strip()
         return "used product"
     except Exception as e:
-        # Keep the web app responsive even if Space is sleeping/down
         print("HF Space error:", repr(e))
         return "used product"
+
 
 # ----------------- serpapi helpers -----------------
 def _serpapi_call_sold(query: str, limit: int):
@@ -216,6 +238,7 @@ def _serpapi_call_sold(query: str, limit: int):
         "serpapi_debug": last_debug
     }
 
+
 # ----------------- main fetch -----------------
 def fetch_ebay_sold(query: str, limit: int = 50):
     if not SERPAPI_KEY:
@@ -246,12 +269,14 @@ def fetch_ebay_sold(query: str, limit: int = 50):
             return cached["data"]
         raise
 
+
 # ----------------- analyze endpoint -----------------
 @app.post("/analyze")
 async def analyze_photo(file: UploadFile = File(...)):
     image_bytes = await file.read()
+    filename = file.filename or "image.png"
 
-    query = generate_keywords_from_image(image_bytes)
+    query = generate_keywords_from_image(image_bytes, filename=filename)
 
     limit = 30
     result = fetch_ebay_sold(query, limit=limit)
@@ -269,23 +294,26 @@ async def analyze_photo(file: UploadFile = File(...)):
     result["used_query"] = query
     return result
 
+
 # ----------------- debug endpoints -----------------
 @app.get("/ping")
 def ping():
     return {"ok": True}
 
+
 @app.get("/debug/ebay")
 def debug_ebay(q: str, limit: int = 50):
     return fetch_ebay_sold(q, limit=limit)
+
 
 @app.get("/debug/cache_clear")
 def cache_clear():
     _cache_clear()
     return {"ok": True, "message": "Cache cleared"}
 
+
 print("\n=== ROUTES LOADED ===")
 for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
 print("=====================\n")
-

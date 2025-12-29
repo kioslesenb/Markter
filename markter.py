@@ -271,12 +271,30 @@ def fetch_ebay_sold(query: str, limit: int = 50):
 
 
 # ----------------- analyze endpoint -----------------
-@app.post("/analyze")
-async def analyze_photo(file: UploadFile = File(...)):
-    image_bytes = await file.read()
-    filename = file.filename or "image.png"
+from typing import Optional
+from fastapi import Form
 
-    query = generate_keywords_from_image(image_bytes, filename=filename)
+@app.post("/analyze")
+async def analyze_photo(
+    keywords: Optional[str] = Form(default=None),
+    file: Optional[UploadFile] = File(default=None),
+    image: Optional[UploadFile] = File(default=None),
+    q: Optional[str] = Form(default=None),
+):
+    # keywords kunnen binnenkomen als 'keywords' of 'q'
+    query = (keywords or q or "").strip()
+
+    # anders proberen we file upload (key 'file' of 'image')
+    up = file or image
+    if not query:
+        if up is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Stuur óf keywords (keywords/q) óf een upload (file/image) als multipart/form-data.",
+            )
+        image_bytes = await up.read()
+        filename = up.filename or "image.png"
+        query = generate_keywords_from_image(image_bytes, filename=filename)
 
     limit = 30
     result = fetch_ebay_sold(query, limit=limit)
@@ -317,3 +335,4 @@ for r in app.routes:
     if isinstance(r, APIRoute):
         print(f"{','.join(sorted(r.methods))}\t{r.path}\t->\t{r.name}")
 print("=====================\n")
+
